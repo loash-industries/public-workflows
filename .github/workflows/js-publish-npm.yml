@@ -1,0 +1,84 @@
+---
+name: Publish to public NPM Registry
+
+permissions:
+  id-token: write
+  contents: read
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: Node.js version for actions/setup-node
+        type: string
+        required: true
+      environment:
+        description: GitHub environment
+        required: false
+        type: string
+      npm_client:
+        description: npm client to use (npm or yarn)
+        type: string
+        default: "yarn"
+      npm_client_production_flag:
+        description: Npm client production flag
+        type: string
+        required: false
+        default: "--frozen-lockfile"
+      yarn_version:
+        description: yarn version (1 or 4)
+        type: string
+        default: "1"
+        required: false
+      npm_registry_url:
+        type: string
+        description: NPM Registry URL for publishing
+        default: "https://registry.npmjs.org"
+        required: false
+      access:
+        type: string
+        description: Package access level (public or restricted)
+        default: "public"
+        required: false
+      working_directory:
+        type: string
+        description: Working directory for running commands (e.g., for monorepos)
+        default: "."
+        required: false
+    secrets:
+      TRINARYEX_NPM_TOKEN:
+        description: NPM authentication token for publishing to npmjs.org
+        required: true
+
+jobs:
+  publish:
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node Base actions
+        uses: loash-industries/public-workflows/.github/actions/node-base-actions@v0.1.0
+        with:
+          node_version: ${{ inputs.node_version }}
+          npm_client: ${{ inputs.npm_client }}
+          npm_client_production_flag: ${{ inputs.npm_client_production_flag }}
+          node_modules_cache_key_prefix: node-modules-publish
+          yarn_version: ${{ inputs.yarn_version }}
+          working_directory: ${{ inputs.working_directory }}
+
+      - name: Configure npm registry
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.TRINARYEX_NPM_TOKEN }}" > .npmrc
+
+      - name: Build package
+        working-directory: ${{ inputs.working_directory }}
+        run: ${{ inputs.npm_client }} run build
+
+      - name: Publish to NPM
+        working-directory: ${{ inputs.working_directory }}
+        run: npm publish --access ${{ inputs.access }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.TRINARYEX_NPM_TOKEN }}

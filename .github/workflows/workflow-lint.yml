@@ -1,0 +1,49 @@
+name: Lint & Audit GitHub Workflows
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+
+jobs:
+  lint-yaml:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yamllint
+        run: sudo pip install yamllint
+      - name: Run yamllint
+        run: |
+          yamllint -d '{extends: default, rules: {line-length: {max: 160}}}' .github/workflows .github/actions || true
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Find & lint embedded bash
+        run: |
+          tmpdir=$(mktemp -d)
+          grep -RIn "run: |" -n .github/workflows .github/actions | cut -d: -f1 | sort -u | while read f; do
+            awk '/run: \|/{flag=1;next}/^[^ ]/{flag=0}flag{print}' "$f" > "$tmpdir/$(basename $f).sh" || true
+          done
+          ls -1 "$tmpdir" | xargs -I{} sh -c 'echo Linting {} && shellcheck "$tmpdir/{}" || true'
+
+  action-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate composite action metadata
+        run: |
+          find .github/actions -maxdepth 2 -name action.yml -print0 | while IFS= read -r -d '' file; do
+            echo "Validating $file";
+            grep -Eq '^name:' "$file" || echo "Missing name in $file";
+            grep -Eq '^runs:' "$file" || echo "Missing runs section in $file";
+          done

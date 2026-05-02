@@ -1,0 +1,103 @@
+name: Base Node actions
+description: Base Node actions to restore cache, setup the node version and install packages for public repos
+inputs:
+  node_version:
+    description: Node.js version.
+    required: true
+  npm_client:
+    description: Npm client used for build and validation (npm, yarn, pnpm)
+    required: true
+    default: "yarn"
+  npm_client_production_flag:
+    description: Npm client production flag
+    required: false
+    default: "--frozen-lockfile"
+  node_modules_cache_key_prefix:
+    description: Cache key prefix for cached node_modules
+    required: false
+    default: "node-modules"
+  yarn_version:
+    description: yarn version (1 or 4)
+    required: false
+    default: "1"
+  yarn_client_production_flag:
+    description: Yarn client production flag for yarn 4
+    required: false
+    default: "--immutable"
+  working_directory:
+    description: Working directory for running commands (e.g., for monorepos)
+    default: "."
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: NPM client check
+      shell: bash
+      env:
+        NPM_CLIENT: ${{ inputs.npm_client }}
+      run: |
+        if [[ ! "$NPM_CLIENT" =~ ^(yarn|npm|pnpm)$ ]]; then
+          echo "Please use a supported NPM client 'npm', 'yarn', or 'pnpm'"
+          exit 1
+        fi
+
+    - name: Corepack enable
+      shell: bash
+      env:
+        NPM_CLIENT: ${{ inputs.npm_client }}
+        YARN_VERSION: ${{ inputs.yarn_version }}
+      run: |
+        if [ "$NPM_CLIENT" = "yarn" ] && [ "$YARN_VERSION" = "4" ]; then
+          corepack enable
+        fi
+        if [ "$NPM_CLIENT" = "pnpm" ]; then
+          corepack enable
+        fi
+
+    - uses: pnpm/action-setup@v4
+      if: ${{ inputs.npm_client == 'pnpm' }}
+
+    - name: Setup lock file name
+      id: lock_file_name
+      shell: bash
+      env:
+        NPM_CLIENT: ${{ inputs.npm_client }}
+        WORKING_DIR: ${{ inputs.working_directory }}
+      run: |
+        if [ "$NPM_CLIENT" = "yarn" ]; then
+          echo "file_name=${WORKING_DIR}/yarn.lock" >> "$GITHUB_OUTPUT"
+        elif [ "$NPM_CLIENT" = "pnpm" ]; then
+          echo "file_name=${WORKING_DIR}/pnpm-lock.yaml" >> "$GITHUB_OUTPUT"
+        else
+          echo "file_name=${WORKING_DIR}/package-lock.json" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node_version }}
+        cache: ${{ inputs.npm_client }}
+        cache-dependency-path: ${{ steps.lock_file_name.outputs.file_name }}
+
+    - name: NPM client install
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        NPM_CLIENT: ${{ inputs.npm_client }}
+        YARN_VERSION: ${{ inputs.yarn_version }}
+      run: |
+        if [ "$NPM_CLIENT" = "yarn" ]; then
+          if [ "$YARN_VERSION" = "4" ]; then
+            yarn install ${{ inputs.yarn_client_production_flag }}
+          else
+            yarn install ${{ inputs.npm_client_production_flag }}
+          fi
+        elif [ "$NPM_CLIENT" = "pnpm" ]; then
+          pnpm install ${{ inputs.npm_client_production_flag }}
+        else
+          npm ci
+        fi

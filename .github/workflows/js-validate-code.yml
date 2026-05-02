@@ -1,0 +1,177 @@
+name: Validate application code
+
+permissions:
+  id-token: write
+  contents: read
+  checks: write
+  actions: read
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: Node.js version.
+        required: true
+        type: string
+      npm_client:
+        description: Npm client used for build and validation
+        required: true
+        type: string
+        default: "yarn"
+      npm_client_production_flag:
+        description: Npm client production flag
+        type: string
+        required: false
+        default: "--frozen-lockfile"
+      yarn_version:
+        description: yarn version
+        required: false
+        type: string
+        default: "1"
+      checkout_repository:
+        description: The repository config for the Checkout action
+        type: string
+        default: ${{ github.repository }}
+      checkout_ref:
+        description: The ref config for the Checkout action
+        type: string
+      test_names:
+        description: List of tests in workflow to execute.
+        type: string
+        default: "['test:cov']"
+      test_timeout_minutes:
+        description: Specify a timeout for the tests job
+        type: number
+        default: 30
+      eslint_enabled:
+        description: Enable ESLint for linting
+        type: boolean
+        default: true
+      prettier_enabled:
+        description: Enable Prettier for linting
+        type: boolean
+        default: true
+      tests_report_path:
+        description: Path to the test report/s. It can be a regular expression for several reports.
+        type: string
+        default: junit.xml
+      tests_coverage_path:
+        description: Path to the test coverage folder
+        type: string
+        default: coverage/
+      typecheck_command:
+        description: Type check command to run
+        type: string
+        default: tscheck
+      typecheck_enabled:
+        description: Enable Type Check for Typescript projects
+        type: boolean
+        default: true
+      working_directory:
+        type: string
+        description: Working directory for running commands (e.g., for monorepos)
+        default: "."
+        required: false
+
+jobs:
+  linters:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.checkout_repository }}
+          ref: ${{ inputs.checkout_ref }}
+
+      - name: Node Base actions
+        uses: loash-industries/public-workflows/.github/actions/node-base-actions@v0.1.0
+        with:
+          node_version: ${{ inputs.node_version }}
+          npm_client: ${{ inputs.npm_client }}
+          npm_client_production_flag: ${{ inputs.npm_client_production_flag }}
+          node_modules_cache_key_prefix: node-modules-lint
+          yarn_version: ${{ inputs.yarn_version }}
+          working_directory: ${{ inputs.working_directory }}
+
+      - name: Run eslint
+        if: ${{ inputs.eslint_enabled }}
+        working-directory: ${{ inputs.working_directory }}
+        run: ${{ inputs.npm_client }} run lint:check
+
+      - name: Run prettier
+        if: ${{ inputs.prettier_enabled }}
+        working-directory: ${{ inputs.working_directory }}
+        run: ${{ inputs.npm_client }} run prettier:check
+
+      - name: Type Check
+        if: ${{ inputs.typecheck_enabled }}
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          if find ./ -name "*.ts" -print -quit | read -r; then
+            ${{ inputs.npm_client }} ${{ inputs.typecheck_command }}
+          else
+            echo "No TypeScript files found, skipping type check."
+          fi
+
+  setup-unit-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      tests: ${{ steps.generate-matrix.outputs.tests }}
+    steps:
+      - name: Generate Matrix
+        id: generate-matrix
+        run: |
+          echo "tests=$TEST_NAMES" >> $GITHUB_OUTPUT
+        env:
+          TEST_NAMES: ${{ inputs.test_names }}
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    if: inputs.test_names != '[]' && inputs.test_names != ''
+    needs: setup-unit-tests
+    timeout-minutes: ${{ inputs.test_timeout_minutes }}
+    strategy:
+      matrix:
+        test: ${{ fromJSON(needs.setup-unit-tests.outputs.tests) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.checkout_repository }}
+          ref: ${{ inputs.checkout_ref }}
+
+      - name: Node Base actions
+        uses: loash-industries/public-workflows/.github/actions/node-base-actions@v0.1.0
+        with:
+          node_version: ${{ inputs.node_version }}
+          npm_client: ${{ inputs.npm_client }}
+          npm_client_production_flag: ${{ inputs.npm_client_production_flag }}
+          node_modules_cache_key_prefix: node-modules-tests
+          yarn_version: ${{ inputs.yarn_version }}
+          working_directory: ${{ inputs.working_directory }}
+
+      - name: Prepare test name
+        run: |
+          echo "TEST_NAME=$(echo '${{ matrix.test }}' | sed 's/:/ /g')" >> $GITHUB_ENV
+          echo "TEST_ARTEFACT_NAME=$(echo '${{ matrix.test }}' | sed 's/:/-/g')" >> $GITHUB_ENV
+
+      - name: Run ${{ env.TEST_NAME }} tests
+        working-directory: ${{ inputs.working_directory }}
+        run: ${{ inputs.npm_client }} run ${{ matrix.test }}
+
+      - name: Test Report ${{ env.TEST_NAME }}
+        uses: dorny/test-reporter@v1
+        if: success() || failure()
+        with:
+          name: Tests report (${{ env.TEST_NAME }})
+          path: ${{ inputs.tests_report_path }}
+          reporter: jest-junit
+          fail-on-empty: "false"
+
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-artifacts-${{ env.TEST_ARTEFACT_NAME }}
+          path: |
+            ${{ inputs.tests_coverage_path }}
+            ${{ inputs.tests_report_path }}

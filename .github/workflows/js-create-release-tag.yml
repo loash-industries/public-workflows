@@ -1,0 +1,86 @@
+name: Create release tag
+
+on:
+  workflow_call:
+    inputs:
+      package_json_path:
+        description: Path to package.json file
+        required: true
+        type: string
+      node_version:
+        description: Node.js version
+        type: string
+        default: "22"
+      npm_client:
+        description: Npm client (npm or yarn)
+        type: string
+        default: "yarn"
+      npm_client_production_flag:
+        description: Npm client production flag
+        type: string
+        default: "--frozen-lockfile"
+      checkout_repository:
+        description: The repository config for the Checkout action
+        type: string
+        default: ${{ github.repository }}
+      checkout_ref:
+        description: The ref config for the Checkout action
+        type: string
+      add_v_prefix_to_version:
+        description: Option to add "v" to version
+        required: false
+        type: string
+        default: "true"
+    outputs:
+      tag:
+        description: "Release tag"
+        value: ${{ jobs.create-tag.outputs.tag }}
+
+jobs:
+  create-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.release_version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          repository: ${{ inputs.checkout_repository }}
+          ref: ${{ inputs.checkout_ref }}
+          token: ${{ github.token }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Install yarn
+        if: ${{ inputs.npm_client == 'yarn' }}
+        run: npm install -g yarn
+
+      - name: Install dependencies
+        run: ${{ inputs.npm_client }} install ${{ inputs.npm_client_production_flag }}
+
+      - name: Configure Git
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+      - name: Bump version with standard-version
+        run: ${{ inputs.npm_client }} run release
+
+      - name: Push version bump and tag
+        run: |
+          git push origin HEAD:${{ inputs.checkout_ref || github.ref_name }} --follow-tags
+
+      - name: Get release version
+        id: release_version
+        run: |
+          version=$(jq -r '.version' ${{ inputs.package_json_path }})
+          if [[ '${{ inputs.add_v_prefix_to_version }}' == 'true' ]]; then
+            version=v${version}
+          fi
+          echo "version=$version" >> $GITHUB_OUTPUT
