@@ -107,7 +107,7 @@ Lints workflow YAML files, embedded shell scripts, and validates composite actio
 
 ### `node-base-actions`
 
-Shared setup action used by the workflows above. Handles Node.js setup, caching, and dependency installation for public repos (no private registry auth needed).
+Shared setup action used by the workflows above. Handles Node.js setup, caching, and dependency installation for public repos.
 
 ## Example: Full Publish Pipeline
 
