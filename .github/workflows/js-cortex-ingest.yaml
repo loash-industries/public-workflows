@@ -1,0 +1,107 @@
+name: Cortex Ingest
+on:
+  workflow_call:
+    inputs:
+      cortex_api_url:
+        description: "Base URL of the Cortex relay API (e.g. https://cortex-relay-dev-api.trinary.exchange)"
+        required: true
+        type: string
+      cortex_dir:
+        description: "Path to the .cortex directory relative to repo root"
+        required: false
+        type: string
+        default: ".cortex"
+      docs_dir:
+        description: "Path to the docs directory relative to repo root. If it exists, all files are included in the ingest payload."
+        required: false
+        type: string
+        default: "docs"
+      npm_private_registry_url:
+        description: "Private npm registry URL (e.g. https://npm.pkg.github.com/). If set, configures .npmrc with GH_AUTH_TOKEN before install."
+        required: false
+        type: string
+        default: ""
+      npm_client:
+        description: "Package manager to use for install (npm or yarn)"
+        required: false
+        type: string
+        default: "npm"
+      node_version:
+        description: "Node.js version for setup-node"
+        required: false
+        type: number
+        default: 22
+    secrets:
+      CORTEX_INGEST_TOKEN:
+        description: "Bearer token for the Cortex ingest API"
+        required: true
+      GH_AUTH_TOKEN:
+        description: "GitHub token for private npm registry authentication"
+        required: false
+
+jobs:
+  ingest:
+    name: Push context to Cortex
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate .cortex directory
+        run: |
+          if [ ! -d "${{ inputs.cortex_dir }}" ]; then
+            echo "::error::Directory ${{ inputs.cortex_dir }} does not exist"
+            exit 1
+          fi
+          if [ ! -f "${{ inputs.cortex_dir }}/manifest.yaml" ]; then
+            echo "::error::manifest.yaml is required in ${{ inputs.cortex_dir }}/"
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Package and ingest .cortex/ contents
+        env:
+          CORTEX_API_URL: ${{ inputs.cortex_api_url }}
+          CORTEX_INGEST_TOKEN: ${{ secrets.CORTEX_INGEST_TOKEN }}
+        run: |
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const cortexDir = '${{ inputs.cortex_dir }}';
+            const docsDir = '${{ inputs.docs_dir }}';
+            const files = {};
+            for (const entry of fs.readdirSync(cortexDir)) {
+              const filePath = path.join(cortexDir, entry);
+              if (fs.statSync(filePath).isFile()) {
+                files[entry] = fs.readFileSync(filePath, 'utf-8');
+              }
+            }
+            if (docsDir && fs.existsSync(docsDir)) {
+              const readDir = (dir, base) => {
+                for (const entry of fs.readdirSync(dir)) {
+                  const full = path.join(dir, entry);
+                  const rel = path.join(base, entry);
+                  if (fs.statSync(full).isDirectory()) {
+                    readDir(full, rel);
+                  } else {
+                    files[rel] = fs.readFileSync(full, 'utf-8');
+                  }
+                }
+              };
+              readDir(docsDir, docsDir);
+            }
+            fs.writeFileSync('/tmp/cortex-payload.json', JSON.stringify({
+              repo: process.env.GITHUB_REPOSITORY,
+              sha: process.env.GITHUB_SHA,
+              type: 'service',
+              files: files
+            }));
+          "
+
+          curl -f -X POST \
+            "${CORTEX_API_URL}/ingest/service" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${CORTEX_INGEST_TOKEN}" \
+            -d @/tmp/cortex-payload.json
