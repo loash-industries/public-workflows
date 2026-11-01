@@ -174,6 +174,14 @@ provenance to public packages built from public repos. To set it up:
    GitHub Actions with the org, the repo, the **calling** workflow's file name
    (e.g. `publish.yml`, not this repo's workflow) and the `environment` you
    pass, if any. The package must already exist on npm.
+
+   Grant it the **publish** permission (`npm trust github … --allow-publish`).
+   "Stage publish" alone isn't enough: these workflows run `npm publish`, not
+   `npm stage publish`, so npm answers `403 OIDC permission denied for this
+   action`. The OIDC exchange succeeds either way, so nothing catches this
+   early. With `js-semantic-release.yml`, the 403 comes after the release
+   commit and tag are pushed. See
+   [recovering a release that didn't reach npm](#recovering-a-release-that-didnt-reach-npm).
 2. In `package.json`, set `repository.url` to the GitHub repo, which npm checks
    for provenance. For `js-semantic-release.yml`, `publishConfig.registry` must
    be unset or exactly `https://registry.npmjs.org/`, **with** the trailing
@@ -185,7 +193,23 @@ provenance to public packages built from public repos. To set it up:
 4. Set `npm_trusted_publishing: true` and stop passing the npm token.
 
 `js-semantic-release.yml` checks the registry and npm version before
-releasing, so a misconfiguration fails before any tag is pushed.
+releasing, so those misconfigurations fail before any tag is pushed.
+
+#### Recovering a release that didn't reach npm
+
+semantic-release pushes the `chore(release): X.Y.Z [skip ci]` commit and the
+`vX.Y.Z` tag before it runs `npm publish`. If the publish then fails, later runs
+treat X.Y.Z as released. Re-running the failed job doesn't help, because its
+checkout is now behind `main`. Once the cause is fixed:
+
+1. Delete the tag: `git push origin :refs/tags/vX.Y.Z`, plus the GitHub
+   release if one was created.
+2. Push a commit to `main` that reverts the release commit, with a message
+   that doesn't contain `[skip ci]` (`git revert`'s default message does).
+   This puts `CHANGELOG.md` and the version back, so the next release doesn't
+   repeat the X.Y.Z section.
+
+That push runs the release again, and it publishes X.Y.Z.
 
 ---
 
