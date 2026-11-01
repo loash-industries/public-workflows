@@ -47,8 +47,12 @@ on:
         description: GitHub token for creating releases, tags, and updating CHANGELOG
         required: true
       NPM_TOKEN:
-        description: NPM authentication token for publishing
-        required: true
+        description: >-
+          npm token for publishing. Omit it to publish with npm trusted
+          publishing (OIDC): configure a trusted publisher for the package on
+          npmjs.com that names the *calling* workflow file, and grant
+          `id-token: write` in the calling workflow.
+        required: false
 
 jobs:
   release:
@@ -56,6 +60,9 @@ jobs:
     environment: ${{ inputs.environment }}
     permissions:
       contents: write
+      # npm trusted publishing (OIDC). The job-level block replaces the
+      # top-level one, so this must be granted here as well.
+      id-token: write
       issues: write
       pull-requests: write
     steps:
@@ -77,9 +84,19 @@ jobs:
 
       - name: Configure npm registry
         working-directory: ${{ inputs.working_directory }}
+        # Secrets can't be referenced in a step `if:`, so the check is in shell.
+        # Passing the token via env also keeps it out of the rendered script.
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            # Leave .npmrc untouched so no long-lived token competes with the
+            # short-lived one npm obtains through the OIDC exchange.
+            echo "No NPM_TOKEN passed; publishing via npm trusted publishing (OIDC)."
+            exit 0
+          fi
           registry=$(echo "${{ inputs.npm_registry_url }}" | sed 's|https:||')
-          echo "${registry}/:_authToken=${{ secrets.NPM_TOKEN }}" >> .npmrc
+          echo "${registry}/:_authToken=${NPM_TOKEN}" >> .npmrc
 
       - name: Build package
         working-directory: ${{ inputs.working_directory }}
