@@ -41,6 +41,15 @@ on:
           the README for the npmjs.com and package.json setup it needs.
         default: false
         required: false
+      npm_staged_publishing:
+        type: boolean
+        description: >-
+          Stage each release on npm (`npm stage publish`) for a maintainer to
+          approve with 2FA, instead of publishing it. Needs
+          npm_trusted_publishing and `npmPublish: false` for
+          @semantic-release/npm. See the README.
+        default: false
+        required: false
       build_output_path:
         type: string
         description: >-
@@ -149,13 +158,24 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
         env:
           TRUSTED_PUBLISHING: ${{ inputs.npm_trusted_publishing }}
+          STAGED: ${{ inputs.npm_staged_publishing }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          if [ "$STAGED" = "true" ] && [ "$TRUSTED_PUBLISHING" != "true" ]; then
+            echo "::error::npm_staged_publishing needs npm_trusted_publishing: true."
+            exit 1
+          fi
           if [ "$TRUSTED_PUBLISHING" != "true" ]; then
             if [ -z "$NPM_TOKEN" ]; then
               echo "::error::NPM_TOKEN is empty. Pass it, or set npm_trusted_publishing: true to publish with npm trusted publishing (OIDC)."
               exit 1
             fi
+            exit 0
+          fi
+          if [ "$STAGED" = "true" ]; then
+            # semantic-release doesn't publish in this mode, so the checks
+            # below don't apply. "Stage release on npm" uses its own npm.
+            echo "Staging releases on npm with trusted publishing (OIDC)."
             exit 0
           fi
 
@@ -188,7 +208,6 @@ jobs:
 
       - name: Release
         working-directory: ${{ inputs.working_directory }}
-        run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GH_AUTH_TOKEN }}
           # @semantic-release/npm writes this into a temporary .npmrc for the
@@ -196,3 +215,38 @@ jobs:
           # so a token from the caller or an environment secret can't quietly
           # stand in if the OIDC exchange fails.
           NPM_TOKEN: ${{ !inputs.npm_trusted_publishing && secrets.NPM_TOKEN || '' }}
+          STAGED: ${{ inputs.npm_staged_publishing }}
+        run: |
+          if [ "$STAGED" != "true" ]; then
+            npx semantic-release
+            exit 0
+          fi
+          # Without the OIDC request variables semantic-release can't get npm
+          # credentials. If @semantic-release/npm isn't set to
+          # `npmPublish: false`, it fails with ENONPMTOKEN before tagging
+          # instead of publishing.
+          echo "Staged publishing: @semantic-release/npm must have npmPublish: false. The next step stages the release."
+          env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN npx semantic-release
+
+      - name: Stage release on npm
+        if: inputs.npm_staged_publishing
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          # @semantic-release/npm writes the new version to package.json even
+          # with npmPublish: false, so an unchanged version means no release.
+          version=$(jq -r .version package.json)
+          if [ "$version" = "$(git show "$GITHUB_SHA:./package.json" | jq -r .version)" ]; then
+            echo "No new release, so there is nothing to stage."
+            exit 0
+          fi
+          # npm needs the dist-tag spelled out for a prerelease. Like
+          # semantic-release's channel, it is the identifier (beta in
+          # 1.0.0-beta.2).
+          tag=latest
+          case "$version" in
+            *-*) tag=${version#*-}; tag=${tag%%.*} ;;
+          esac
+          # The runner's npm predates `npm stage`.
+          npm install -g npm@^11.21.1
+          npm stage publish --tag "$tag"
+          echo "::notice::Staged $(jq -r .name package.json)@$version on npm. It goes live once a maintainer approves it with \`npm stage approve <id>\` or on npmjs.com."

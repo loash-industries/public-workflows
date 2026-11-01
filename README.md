@@ -103,6 +103,7 @@ jobs:
 | `npm_client_production_flag` | no | `--frozen-lockfile` | Install flag |
 | `yarn_version` | no | `1` | Yarn version (`1` or `4`) |
 | `npm_trusted_publishing` | no | `false` | Publish with [npm trusted publishing](#npm-trusted-publishing) instead of `NPM_TOKEN` |
+| `npm_staged_publishing` | no | `false` | [Stage](#staged-publishing) each release for 2FA approval instead of publishing it. Needs `npm_trusted_publishing` |
 | `build_output_path` | no | `dist` | Directory the build writes, relative to `working_directory` |
 | `working_directory` | no | `.` | Working directory (monorepo support) |
 | `npm_registry_url` | no | - | Deprecated and ignored: the registry comes from `publishConfig.registry` or `.npmrc` |
@@ -175,12 +176,12 @@ provenance to public packages built from public repos. To set it up:
    (e.g. `publish.yml`, not this repo's workflow) and the `environment` you
    pass, if any. The package must already exist on npm.
 
-   Grant it the **publish** permission (`npm trust github … --allow-publish`).
-   "Stage publish" alone isn't enough: these workflows run `npm publish`, not
-   `npm stage publish`, so npm answers `403 OIDC permission denied for this
-   action`. The OIDC exchange succeeds either way, so nothing catches this
-   early. With `js-semantic-release.yml`, the 403 comes after the release
-   commit and tag are pushed. See
+   Grant the permission that matches how you publish. With
+   [staged publishing](#staged-publishing), which npm recommends, that is
+   **npm stage publish**. Otherwise it is **npm publish**. The wrong one gets
+   `403 OIDC permission denied for this action` only at publish time, because
+   the OIDC exchange succeeds either way. With `js-semantic-release.yml`, that
+   403 comes after the release commit and tag are pushed. See
    [recovering a release that didn't reach npm](#recovering-a-release-that-didnt-reach-npm).
 2. In `package.json`, set `repository.url` to the GitHub repo, which npm checks
    for provenance. For `js-semantic-release.yml`, `publishConfig.registry` must
@@ -194,6 +195,27 @@ provenance to public packages built from public repos. To set it up:
 
 `js-semantic-release.yml` checks the registry and npm version before
 releasing, so those misconfigurations fail before any tag is pushed.
+
+#### Staged publishing
+
+With `npm_staged_publishing: true` as well (`js-semantic-release.yml` only),
+CI stages each release, and it only becomes installable once a maintainer
+approves it with 2FA. A compromised workflow, account or dependency can then
+stage a version, but it can't ship one.
+
+1. Give the trusted publisher the **npm stage publish** permission.
+2. Turn off the npm plugin's own publish in `.releaserc`:
+   `["@semantic-release/npm", { "npmPublish": false }]`. It still writes the
+   new version to `package.json`. semantic-release runs without npm
+   credentials in this mode, so if you forget this, the plugin fails with
+   `ENONPMTOKEN` before anything is tagged.
+3. After semantic-release cuts a release, the workflow runs
+   `npm stage publish` and logs the stage ID. Approve it with
+   `npm stage approve <id>` or on npmjs.com (`npm stage list` shows what's
+   pending).
+
+The release commit, tag and GitHub release appear right away, but npm serves
+the version only after approval.
 
 #### Recovering a release that didn't reach npm
 
