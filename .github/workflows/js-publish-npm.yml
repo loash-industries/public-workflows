@@ -1,10 +1,6 @@
 ---
 name: Publish to public NPM Registry
 
-permissions:
-  id-token: write
-  contents: read
-
 on:
   workflow_call:
     inputs:
@@ -40,6 +36,20 @@ on:
         description: Package access level (public or restricted)
         default: "public"
         required: false
+      npm_trusted_publishing:
+        type: boolean
+        description: >-
+          Publish with npm trusted publishing (OIDC) instead of
+          TRINARYEX_NPM_TOKEN. See the README for the npmjs.com setup it needs.
+        default: false
+        required: false
+      build_output_path:
+        type: string
+        description: >-
+          Directory the build writes, relative to working_directory. It is
+          carried from the build job to the publish job.
+        default: "dist"
+        required: false
       working_directory:
         type: string
         description: Working directory for running commands (e.g., for monorepos)
@@ -47,13 +57,20 @@ on:
         required: false
     secrets:
       TRINARYEX_NPM_TOKEN:
-        description: NPM authentication token for publishing to npmjs.org
-        required: true
+        description: >-
+          npm token for publishing to npmjs.org. Required unless
+          npm_trusted_publishing is true, in which case it is ignored.
+        required: false
 
 jobs:
-  publish:
-    environment: ${{ inputs.environment }}
+  # Dependency install and build scripts run here, with a read-only token and
+  # no OIDC token, so they can't publish to npm.
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      artifact: ${{ steps.artifact.outputs.name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -68,17 +85,84 @@ jobs:
           yarn_version: ${{ inputs.yarn_version }}
           working_directory: ${{ inputs.working_directory }}
 
-      - name: Configure npm registry
-        working-directory: ${{ inputs.working_directory }}
-        run: |
-          echo "//registry.npmjs.org/:_authToken=${{ secrets.TRINARYEX_NPM_TOKEN }}" > .npmrc
-
       - name: Build package
         working-directory: ${{ inputs.working_directory }}
         run: ${{ inputs.npm_client }} run build
 
+      # Artifact names are unique per workflow run, so this one must differ
+      # between two calls of this workflow from the same caller.
+      - name: Name build output
+        id: artifact
+        run: echo "name=build-output-$(cat /proc/sys/kernel/random/uuid)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ inputs.working_directory }}/${{ inputs.build_output_path }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [build]
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # For npm trusted publishing. A job's permissions can't depend on an
+      # input, so callers must grant id-token: write even with a token.
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Install scripts already ran in the build job. They are skipped here,
+      # where they could mint an npm publish token. The package's own
+      # prepublish/prepack scripts still run during `npm publish`.
+      - name: Node Base actions
+        uses: loash-industries/public-workflows/.github/actions/node-base-actions@v0.1.0
+        env:
+          npm_config_ignore_scripts: "true" # npm ci
+          YARN_ENABLE_SCRIPTS: "false" # yarn 2+
+        with:
+          node_version: ${{ inputs.node_version }}
+          npm_client: ${{ inputs.npm_client }}
+          # yarn 1 and pnpm. yarn 2+ rejects the flag but never receives it.
+          npm_client_production_flag: ${{ inputs.npm_client_production_flag }} --ignore-scripts
+          node_modules_cache_key_prefix: node-modules-publish
+          yarn_version: ${{ inputs.yarn_version }}
+          working_directory: ${{ inputs.working_directory }}
+
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: ${{ inputs.working_directory }}/${{ inputs.build_output_path }}
+
+      - name: Configure npm auth
+        env:
+          TRUSTED_PUBLISHING: ${{ inputs.npm_trusted_publishing }}
+          NPM_TOKEN: ${{ secrets.TRINARYEX_NPM_TOKEN }}
+        run: |
+          if [ "$TRUSTED_PUBLISHING" = "true" ]; then
+            # npm exchanges the OIDC token itself from 11.5.1 on. The runner's
+            # npm is older for Node 22.
+            npm install -g npm@^11.5.1
+            exit 0
+          fi
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::TRINARYEX_NPM_TOKEN is empty. Pass it, or set npm_trusted_publishing: true to publish with npm trusted publishing (OIDC)."
+            exit 1
+          fi
+          # Kept outside the checkout so the token can't end up in the package
+          # or the repo. npm reads ${NODE_AUTH_TOKEN} from the environment.
+          echo '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}' > "$RUNNER_TEMP/.npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/.npmrc" >> "$GITHUB_ENV"
+
       - name: Publish to NPM
         working-directory: ${{ inputs.working_directory }}
-        run: npm publish --access ${{ inputs.access }}
+        run: npm publish --access "$ACCESS"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.TRINARYEX_NPM_TOKEN }}
+          ACCESS: ${{ inputs.access }}
+          NODE_AUTH_TOKEN: ${{ !inputs.npm_trusted_publishing && secrets.TRINARYEX_NPM_TOKEN || '' }}
