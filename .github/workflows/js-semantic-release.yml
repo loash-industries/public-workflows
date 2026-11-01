@@ -1,12 +1,6 @@
 ---
 name: Semantic Release
 
-permissions:
-  id-token: write
-  contents: write
-  issues: write
-  pull-requests: write
-
 on:
   workflow_call:
     inputs:
@@ -34,8 +28,25 @@ on:
         required: false
       npm_registry_url:
         type: string
-        description: NPM Registry URL for publishing
+        description: >-
+          Deprecated and ignored. @semantic-release/npm publishes to
+          publishConfig.registry in package.json, else the registry in .npmrc,
+          else registry.npmjs.org, and writes NPM_TOKEN for that registry itself.
         default: "https://registry.npmjs.org"
+        required: false
+      npm_trusted_publishing:
+        type: boolean
+        description: >-
+          Publish with npm trusted publishing (OIDC) instead of NPM_TOKEN. See
+          the README for the npmjs.com and package.json setup it needs.
+        default: false
+        required: false
+      build_output_path:
+        type: string
+        description: >-
+          Directory the build writes, relative to working_directory. It is
+          carried from the build job to the release job.
+        default: "dist"
         required: false
       working_directory:
         type: string
@@ -48,29 +59,22 @@ on:
         required: true
       NPM_TOKEN:
         description: >-
-          npm token for publishing. Omit it to publish with npm trusted
-          publishing (OIDC): configure a trusted publisher for the package on
-          npmjs.com that names the *calling* workflow file, and grant
-          `id-token: write` in the calling workflow.
+          npm token for publishing. Required unless npm_trusted_publishing is
+          true, in which case it is ignored.
         required: false
 
 jobs:
-  release:
+  # Dependency install and build scripts run here, with a read-only token and
+  # no OIDC token, so they can neither publish to npm nor push to the repo.
+  build:
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
     permissions:
-      contents: write
-      # npm trusted publishing (OIDC). The job-level block replaces the
-      # top-level one, so this must be granted here as well.
-      id-token: write
-      issues: write
-      pull-requests: write
+      contents: read
+    outputs:
+      artifact: ${{ steps.artifact.outputs.name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GH_AUTH_TOKEN }}
 
       - name: Node Base actions
         uses: loash-industries/public-workflows/.github/actions/node-base-actions@v0.1.0
@@ -82,29 +86,113 @@ jobs:
           yarn_version: ${{ inputs.yarn_version }}
           working_directory: ${{ inputs.working_directory }}
 
-      - name: Configure npm registry
-        working-directory: ${{ inputs.working_directory }}
-        # Secrets can't be referenced in a step `if:`, so the check is in shell.
-        # Passing the token via env also keeps it out of the rendered script.
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NPM_TOKEN" ]; then
-            # Leave .npmrc untouched so no long-lived token competes with the
-            # short-lived one npm obtains through the OIDC exchange.
-            echo "No NPM_TOKEN passed; publishing via npm trusted publishing (OIDC)."
-            exit 0
-          fi
-          registry=$(echo "${{ inputs.npm_registry_url }}" | sed 's|https:||')
-          echo "${registry}/:_authToken=${NPM_TOKEN}" >> .npmrc
-
       - name: Build package
         working-directory: ${{ inputs.working_directory }}
         run: ${{ inputs.npm_client }} run build
+
+      # Artifact names are unique per workflow run, so this one must differ
+      # between two calls of this workflow from the same caller.
+      - name: Name build output
+        id: artifact
+        run: echo "name=build-output-$(cat /proc/sys/kernel/random/uuid)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ inputs.working_directory }}/${{ inputs.build_output_path }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      # For npm trusted publishing. A job's permissions can't depend on an
+      # input, so callers must grant id-token: write even with NPM_TOKEN.
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_AUTH_TOKEN }}
+
+      # Install scripts already ran in the build job. They are skipped here,
+      # where they could mint an npm publish token.
+      - name: Node Base actions
+        uses: loash-industries/public-workflows/.github/actions/node-base-actions@v0.1.0
+        env:
+          npm_config_ignore_scripts: "true" # npm ci
+          YARN_ENABLE_SCRIPTS: "false" # yarn 2+
+        with:
+          node_version: ${{ inputs.node_version }}
+          npm_client: ${{ inputs.npm_client }}
+          # yarn 1 and pnpm. yarn 2+ rejects the flag but never receives it.
+          npm_client_production_flag: ${{ inputs.npm_client_production_flag }} --ignore-scripts
+          node_modules_cache_key_prefix: node-modules-release
+          yarn_version: ${{ inputs.yarn_version }}
+          working_directory: ${{ inputs.working_directory }}
+
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: ${{ inputs.working_directory }}/${{ inputs.build_output_path }}
+
+      - name: Check npm auth
+        working-directory: ${{ inputs.working_directory }}
+        env:
+          TRUSTED_PUBLISHING: ${{ inputs.npm_trusted_publishing }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ "$TRUSTED_PUBLISHING" != "true" ]; then
+            if [ -z "$NPM_TOKEN" ]; then
+              echo "::error::NPM_TOKEN is empty. Pass it, or set npm_trusted_publishing: true to publish with npm trusted publishing (OIDC)."
+              exit 1
+            fi
+            exit 0
+          fi
+
+          # @semantic-release/npm only tries OIDC when the registry is exactly
+          # this string, trailing slash included, and otherwise fails with
+          # ENONPMTOKEN.
+          official=https://registry.npmjs.org/
+          registry=$(jq -r '.publishConfig.registry // empty' package.json)
+          if [ -n "$registry" ] && [ "$registry" != "$official" ]; then
+            echo "::error::Trusted publishing needs publishConfig.registry in package.json to be exactly $official (or unset), not $registry."
+            exit 1
+          fi
+
+          # The plugin publishes with the first npm in node_modules/.bin (here
+          # or in a parent directory), else the one next to node. That npm
+          # exchanges the OIDC token again after the release tag is pushed, so
+          # one without OIDC support would leave a tag with nothing published.
+          bins=""
+          dir=$PWD
+          while [ "$dir" != / ]; do
+            bins="$bins$dir/node_modules/.bin:"
+            dir=$(dirname "$dir")
+          done
+          npm_version=$(PATH="$bins$(dirname "$(command -v node)"):$PATH" npm --version)
+          if ! printf '11.5.1\n%s\n' "$npm_version" | sort -V -C; then
+            echo "::error::Trusted publishing needs npm 11.5.1 or later, but semantic-release would publish with npm $npm_version. Use semantic-release 25 (@semantic-release/npm 13.1.0 or later)."
+            exit 1
+          fi
+          echo "Publishing with npm trusted publishing (OIDC) using npm $npm_version."
 
       - name: Release
         working-directory: ${{ inputs.working_directory }}
         run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GH_AUTH_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # @semantic-release/npm writes this into a temporary .npmrc for the
+          # registry it publishes to. It is withheld under trusted publishing,
+          # so a token from the caller or an environment secret can't quietly
+          # stand in if the OIDC exchange fails.
+          NPM_TOKEN: ${{ !inputs.npm_trusted_publishing && secrets.NPM_TOKEN || '' }}
