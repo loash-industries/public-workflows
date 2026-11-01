@@ -210,9 +210,10 @@ stage a version, but it can't ship one.
    credentials in this mode, so if you forget this, the plugin fails with
    `ENONPMTOKEN` before anything is tagged.
 3. After semantic-release cuts a release, the workflow runs
-   `npm stage publish` and logs the stage ID. Approve it with
-   `npm stage approve <id>` or on npmjs.com (`npm stage list` shows what's
-   pending).
+   `npm stage publish`. The run's summary page shows the stage ID and the
+   exact `npm stage approve <id>` command, plus a link to the package on
+   npmjs.com. Approve it there or with the command (npm 11.21 or later).
+   `npm stage list` shows what's pending.
 
 The release commit, tag and GitHub release appear right away, but npm serves
 the version only after approval.

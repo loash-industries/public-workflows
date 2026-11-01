@@ -248,5 +248,30 @@ jobs:
           esac
           # The runner's npm predates `npm stage`.
           npm install -g npm@^11.21.1
-          npm stage publish --tag "$tag"
-          echo "::notice::Staged $(jq -r .name package.json)@$version on npm. It goes live once a maintainer approves it with \`npm stage approve <id>\` or on npmjs.com."
+          npm stage publish --tag "$tag" > "$RUNNER_TEMP/stage.out"
+          cat "$RUNNER_TEMP/stage.out"
+
+          # npm prints "+ <name>@<version> (staged with id <id>)". If that
+          # changes, the summary falls back to `npm stage list`.
+          name=$(jq -r .name package.json)
+          id=$(sed -n 's/.*(staged with id \([^)]*\)).*/\1/p' "$RUNNER_TEMP/stage.out" | tail -n 1)
+          if [ -n "$id" ]; then
+            approve="npm stage approve $id"
+          else
+            approve="npm stage list $name   # then: npm stage approve <id>"
+          fi
+          echo "::notice::Staged $name@$version on npm. Approve it with 2FA to make it installable: $approve"
+          fence='```'
+          {
+            echo "### $name@$version is staged on npm"
+            echo
+            echo "It isn't installable until a maintainer approves it with 2FA, with npm 11.21 or later or on [npmjs.com](https://www.npmjs.com/package/$name):"
+            echo
+            echo "${fence}sh"
+            echo "$approve"
+            echo "$fence"
+            if [ -n "$id" ]; then
+              echo
+              echo "To check the tarball first: \`npm stage download $id\`. To discard it: \`npm stage reject $id\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
