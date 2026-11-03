@@ -148,25 +148,6 @@ jobs:
           yarn_version: ${{ inputs.yarn_version }}
           working_directory: ${{ inputs.working_directory }}
 
-      # node-base-actions runs its own actions/checkout with the default
-      # GITHUB_TOKEN, which replaces the GH_AUTH_TOKEN credentials persisted by
-      # the checkout above. semantic-release would then push the release commit
-      # as github-actions[bot], which the org ruleset default-branch-review
-      # blocks. Check out again (keeping node_modules) to restore GH_AUTH_TOKEN
-      # and full history, so the push goes out as the token owner.
-      - name: Restore release git credentials
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          clean: false
-          token: ${{ secrets.GH_AUTH_TOKEN }}
-
-      - name: Download build output
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.build.outputs.artifact }}
-          path: ${{ inputs.working_directory }}/${{ inputs.build_output_path }}
-
       - name: Check npm auth
         working-directory: ${{ inputs.working_directory }}
         env:
@@ -219,6 +200,28 @@ jobs:
           fi
           echo "Publishing with npm trusted publishing (OIDC) using npm $npm_version."
 
+      # node-base-actions runs its own actions/checkout with the default
+      # GITHUB_TOKEN, which replaces the GH_AUTH_TOKEN credentials persisted by
+      # the checkout above. semantic-release would then push the release commit
+      # as github-actions[bot], which the org ruleset default-branch-review
+      # blocks. Check out again (keeping node_modules) to restore GH_AUTH_TOKEN
+      # and full history, so the push goes out as the token owner. It runs
+      # just before Release, the only step that needs it, and is dropped
+      # right after, so no step that runs node_modules code reads it from
+      # .git/config.
+      - name: Restore release git credentials
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          clean: false
+          token: ${{ secrets.GH_AUTH_TOKEN }}
+
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: ${{ inputs.working_directory }}/${{ inputs.build_output_path }}
+
       - name: Release
         working-directory: ${{ inputs.working_directory }}
         env:
@@ -240,6 +243,12 @@ jobs:
           # instead of publishing.
           echo "Staged publishing: @semantic-release/npm must have npmPublish: false. The next step stages the release."
           env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN npx semantic-release
+
+      # GH_AUTH_TOKEN is an org owner's token, which bypasses every org ruleset.
+      # Remove it from .git/config once the release push is done.
+      - name: Drop release git credentials
+        if: always()
+        run: git config --local --unset-all 'http.https://github.com/.extraheader' || true
 
       - name: Stage release on npm
         if: inputs.npm_staged_publishing
