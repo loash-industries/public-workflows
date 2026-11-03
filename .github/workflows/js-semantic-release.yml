@@ -148,6 +148,19 @@ jobs:
           yarn_version: ${{ inputs.yarn_version }}
           working_directory: ${{ inputs.working_directory }}
 
+      # node-base-actions runs its own actions/checkout with the default
+      # GITHUB_TOKEN, which replaces the GH_AUTH_TOKEN credentials persisted by
+      # the checkout above. semantic-release would then push the release commit
+      # as github-actions[bot], which the org ruleset default-branch-review
+      # blocks. Check out again (keeping node_modules) to restore GH_AUTH_TOKEN
+      # and full history, so the push goes out as the token owner.
+      - name: Restore release git credentials
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          clean: false
+          token: ${{ secrets.GH_AUTH_TOKEN }}
+
       - name: Download build output
         uses: actions/download-artifact@v4
         with:
