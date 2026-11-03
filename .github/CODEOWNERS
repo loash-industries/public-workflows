@@ -1,0 +1,4 @@
+# Every path in this repo is owned by the devops team. With the org ruleset
+# `control-plane-code-owners` (triex-root-infra/github_rulesets.tf), PRs to
+# main need an approving review from @loash-industries/devops.
+* @loash-industries/devops
