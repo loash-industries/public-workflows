@@ -73,10 +73,10 @@ jobs:
       artifact: ${{ steps.artifact.outputs.name }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Node Base actions
-        uses: loash-industries/public-workflows/.github/actions/node-base-actions@v0.1.0
+        uses: loash-industries/public-workflows/.github/actions/node-base-actions@ccf853269790fd54ddcaafc4f5d3d7a0571b36f4 # v0.1.0
         with:
           node_version: ${{ inputs.node_version }}
           npm_client: ${{ inputs.npm_client }}
@@ -96,7 +96,7 @@ jobs:
         run: echo "name=build-output-$(cat /proc/sys/kernel/random/uuid)" >> "$GITHUB_OUTPUT"
 
       - name: Upload build output
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: ${{ inputs.working_directory }}/${{ inputs.build_output_path }}
@@ -115,13 +115,13 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Install scripts already ran in the build job. They are skipped here,
       # where they could mint an npm publish token. The package's own
       # prepublish/prepack scripts still run during `npm publish`.
       - name: Node Base actions
-        uses: loash-industries/public-workflows/.github/actions/node-base-actions@v0.1.0
+        uses: loash-industries/public-workflows/.github/actions/node-base-actions@ccf853269790fd54ddcaafc4f5d3d7a0571b36f4 # v0.1.0
         env:
           npm_config_ignore_scripts: "true" # npm ci
           YARN_ENABLE_SCRIPTS: "false" # yarn 2+
@@ -135,7 +135,7 @@ jobs:
           working_directory: ${{ inputs.working_directory }}
 
       - name: Download build output
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ needs.build.outputs.artifact }}
           path: ${{ inputs.working_directory }}/${{ inputs.build_output_path }}

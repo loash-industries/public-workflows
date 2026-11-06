@@ -64,8 +64,11 @@ on:
         required: false
     secrets:
       GH_AUTH_TOKEN:
-        description: GitHub token for creating releases, tags, and updating CHANGELOG
-        required: true
+        description: >-
+          Deprecated and ignored (DEVOPS-22). Releases now use the job's
+          GITHUB_TOKEN. Kept only so callers that still pass it (they call this
+          workflow at @main) don't fail; drop it from the caller.
+        required: false
       NPM_TOKEN:
         description: >-
           npm token for publishing. Required unless npm_trusted_publishing is
@@ -83,10 +86,10 @@ jobs:
       artifact: ${{ steps.artifact.outputs.name }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Node Base actions
-        uses: loash-industries/public-workflows/.github/actions/node-base-actions@v0.1.0
+        uses: loash-industries/public-workflows/.github/actions/node-base-actions@ccf853269790fd54ddcaafc4f5d3d7a0571b36f4 # v0.1.0
         with:
           node_version: ${{ inputs.node_version }}
           npm_client: ${{ inputs.npm_client }}
@@ -106,7 +109,7 @@ jobs:
         run: echo "name=build-output-$(cat /proc/sys/kernel/random/uuid)" >> "$GITHUB_OUTPUT"
 
       - name: Upload build output
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: ${{ inputs.working_directory }}/${{ inputs.build_output_path }}
@@ -127,15 +130,15 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-          token: ${{ secrets.GH_AUTH_TOKEN }}
+          persist-credentials: false
 
       # Install scripts already ran in the build job. They are skipped here,
       # where they could mint an npm publish token.
       - name: Node Base actions
-        uses: loash-industries/public-workflows/.github/actions/node-base-actions@v0.1.0
+        uses: loash-industries/public-workflows/.github/actions/node-base-actions@ccf853269790fd54ddcaafc4f5d3d7a0571b36f4 # v0.1.0
         env:
           npm_config_ignore_scripts: "true" # npm ci
           YARN_ENABLE_SCRIPTS: "false" # yarn 2+
@@ -200,24 +203,21 @@ jobs:
           fi
           echo "Publishing with npm trusted publishing (OIDC) using npm $npm_version."
 
-      # node-base-actions runs its own actions/checkout with the default
-      # GITHUB_TOKEN, which replaces the GH_AUTH_TOKEN credentials persisted by
-      # the checkout above. semantic-release would then push the release commit
-      # as github-actions[bot], which the org ruleset default-branch-review
-      # blocks. Check out again (keeping node_modules) to restore GH_AUTH_TOKEN
-      # and full history, so the push goes out as the token owner. It runs
-      # just before Release, the only step that needs it, and is dropped
-      # right after, so no step that runs node_modules code reads it from
-      # .git/config.
-      - name: Restore release git credentials
-        uses: actions/checkout@v4
+      # DEVOPS-22: the release pushes only its tag and the GitHub Release, with
+      # this job's GITHUB_TOKEN. It no longer pushes a release commit to main:
+      # that needed an org owner's PAT to get past the default-branch rulesets.
+      # Callers must therefore drop @semantic-release/git (and the CHANGELOG
+      # commit) from their release config. The published version comes from the
+      # tag; @semantic-release/npm writes it into package.json in the workspace.
+      # Credentials are persisted only for this step and dropped right after.
+      - name: Release git credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           clean: false
-          token: ${{ secrets.GH_AUTH_TOKEN }}
 
       - name: Download build output
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ needs.build.outputs.artifact }}
           path: ${{ inputs.working_directory }}/${{ inputs.build_output_path }}
@@ -225,7 +225,7 @@ jobs:
       - name: Release
         working-directory: ${{ inputs.working_directory }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_AUTH_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           # @semantic-release/npm writes this into a temporary .npmrc for the
           # registry it publishes to. It is withheld under trusted publishing,
           # so a token from the caller or an environment secret can't quietly
@@ -244,8 +244,7 @@ jobs:
           echo "Staged publishing: @semantic-release/npm must have npmPublish: false. The next step stages the release."
           env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN npx semantic-release
 
-      # GH_AUTH_TOKEN is an org owner's token, which bypasses every org ruleset.
-      # Remove it from .git/config once the release push is done.
+      # Remove the persisted token from .git/config once the release push is done.
       - name: Drop release git credentials
         if: always()
         run: git config --local --unset-all 'http.https://github.com/.extraheader' || true

@@ -78,13 +78,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ inputs.checkout_repository }}
           ref: ${{ inputs.checkout_ref }}
 
       - name: Node Base actions
-        uses: loash-industries/public-workflows/.github/actions/node-base-actions@v0.1.0
+        uses: loash-industries/public-workflows/.github/actions/node-base-actions@ccf853269790fd54ddcaafc4f5d3d7a0571b36f4 # v0.1.0
         with:
           node_version: ${{ inputs.node_version }}
           npm_client: ${{ inputs.npm_client }}
@@ -135,13 +135,13 @@ jobs:
         test: ${{ fromJSON(needs.setup-unit-tests.outputs.tests) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ inputs.checkout_repository }}
           ref: ${{ inputs.checkout_ref }}
 
       - name: Node Base actions
-        uses: loash-industries/public-workflows/.github/actions/node-base-actions@v0.1.0
+        uses: loash-industries/public-workflows/.github/actions/node-base-actions@ccf853269790fd54ddcaafc4f5d3d7a0571b36f4 # v0.1.0
         with:
           node_version: ${{ inputs.node_version }}
           npm_client: ${{ inputs.npm_client }}
@@ -160,7 +160,7 @@ jobs:
         run: ${{ inputs.npm_client }} run ${{ matrix.test }}
 
       - name: Test Report ${{ env.TEST_NAME }}
-        uses: dorny/test-reporter@v1
+        uses: dorny/test-reporter@3eeb9fc888e82e8be2fb356bbeec2750231672bc # v1
         if: success() || failure()
         with:
           name: Tests report (${{ env.TEST_NAME }})
@@ -169,7 +169,7 @@ jobs:
           fail-on-empty: "false"
 
       - name: Upload test artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: tests-artifacts-${{ env.TEST_ARTEFACT_NAME }}
           path: |

@@ -15,7 +15,7 @@ jobs:
   lint-yaml:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install yamllint
         run: sudo pip install yamllint
       - name: Run yamllint
@@ -25,7 +25,7 @@ jobs:
   shellcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Find & lint embedded bash
@@ -39,7 +39,7 @@ jobs:
   action-metadata:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Validate composite action metadata
         run: |
           find .github/actions -maxdepth 2 -name action.yml -print0 | while IFS= read -r -d '' file; do
@@ -47,3 +47,24 @@ jobs:
             grep -Eq '^name:' "$file" || echo "Missing name in $file";
             grep -Eq '^runs:' "$file" || echo "Missing runs section in $file";
           done
+
+  # DEVOPS-30: every uses: here is pinned to a full commit SHA.
+  sha-pinning:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Fail on unpinned uses
+        run: |
+          set -euo pipefail
+          bad=$(grep -RnE '^\s*-?\s*uses:\s*' .github/workflows .github/actions \
+            | grep -vE 'uses:\s*["'"'"']?\./' \
+            | grep -vE 'uses:\s*["'"'"']?docker://' \
+            | grep -vE '@[0-9a-f]{40}([^0-9a-f]|$)' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Pin these to a full commit SHA (add the version as a comment):"
+            echo "$bad"
+            exit 1
+          fi
+
