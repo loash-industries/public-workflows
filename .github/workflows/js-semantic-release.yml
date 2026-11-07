@@ -89,7 +89,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Node Base actions
-        uses: loash-industries/public-workflows/.github/actions/node-base-actions@ccf853269790fd54ddcaafc4f5d3d7a0571b36f4 # v0.1.0
+        uses: loash-industries/public-workflows/.github/actions/node-base-actions@7f3d345e01a92525698a5d6148497fa0e8e133e9 # v0.3.0
         with:
           node_version: ${{ inputs.node_version }}
           npm_client: ${{ inputs.npm_client }}
@@ -138,7 +138,7 @@ jobs:
       # Install scripts already ran in the build job. They are skipped here,
       # where they could mint an npm publish token.
       - name: Node Base actions
-        uses: loash-industries/public-workflows/.github/actions/node-base-actions@ccf853269790fd54ddcaafc4f5d3d7a0571b36f4 # v0.1.0
+        uses: loash-industries/public-workflows/.github/actions/node-base-actions@7f3d345e01a92525698a5d6148497fa0e8e133e9 # v0.3.0
         env:
           npm_config_ignore_scripts: "true" # npm ci
           YARN_ENABLE_SCRIPTS: "false" # yarn 2+
